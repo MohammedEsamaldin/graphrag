@@ -20,6 +20,8 @@ from graphrag.index.operations.extract_covariates.typing import (
     Covariate,
     CovariateExtractionResult,
 )
+from graphrag.index.operations.self_consistency import check_self_consistency
+from graphrag.query.structured_search.local_search.search import LocalSearch
 from graphrag.index.utils.derive_from_rows import derive_from_rows
 from graphrag.language_model.manager import ModelManager
 
@@ -39,6 +41,7 @@ async def extract_covariates(
     async_mode: AsyncType = AsyncType.AsyncIO,
     entity_types: list[str] | None = None,
     num_threads: int = 4,
+    consistency_search: LocalSearch | None = None,
 ):
     """Extract claims from a piece of text."""
     logger.debug("extract_covariates strategy=%s", strategy)
@@ -60,10 +63,19 @@ async def extract_covariates(
             cache=cache,
             strategy_config=strategy_config,
         )
-        return [
-            create_row_from_claim_data(row, item, covariate_type)
-            for item in result.covariate_data
-        ]
+        rows: list[dict[str, Any]] = []
+        for item in result.covariate_data:
+            if consistency_search is not None:
+                check = check_self_consistency(item, consistency_search)
+                if not check.is_consistent:
+                    logger.warning(
+                        "Contradicting claim skipped: %s conflicts with %s",
+                        item,
+                        [c.id for c in check.conflicts],
+                    )
+                    continue
+            rows.append(create_row_from_claim_data(row, item, covariate_type))
+        return rows
 
     results = await derive_from_rows(
         input,
